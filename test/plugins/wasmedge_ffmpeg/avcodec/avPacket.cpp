@@ -366,6 +366,58 @@ TEST_F(FFmpegTest, AVPacketTest) {
     EXPECT_EQ(Result[0].get<int32_t>(), static_cast<int32_t>(ErrNo::Success));
   }
 }
+TEST_F(FFmpegTest, AVPacketDataBounds) {
+  ASSERT_TRUE(AVCodecMod != nullptr);
+
+  uint32_t PacketPtr = UINT32_C(4);
+  auto *FuncInst =
+      AVCodecMod->findFuncExports("wasmedge_ffmpeg_avcodec_av_packet_alloc");
+  auto &HostFuncAVPacketAlloc =
+      dynamic_cast<WasmEdge::Host::WasmEdgeFFmpeg::AVcodec::AVPacketAlloc &>(
+          FuncInst->getHostFunc());
+  HostFuncAVPacketAlloc.run(
+      CallFrame, std::initializer_list<WasmEdge::ValVariant>{PacketPtr},
+      Result);
+  ASSERT_EQ(Result[0].get<int32_t>(), static_cast<int32_t>(ErrNo::Success));
+  uint32_t PacketId = readUInt32(MemInst, PacketPtr);
+  ASSERT_TRUE(PacketId > 0);
+
+  FuncInst =
+      AVCodecMod->findFuncExports("wasmedge_ffmpeg_avcodec_av_new_packet");
+  auto &HostFuncAVNewPacket =
+      dynamic_cast<WasmEdge::Host::WasmEdgeFFmpeg::AVcodec::AVNewPacket &>(
+          FuncInst->getHostFunc());
+  uint32_t PacketSize = UINT32_C(40);
+  HostFuncAVNewPacket.run(
+      CallFrame,
+      std::initializer_list<WasmEdge::ValVariant>{PacketId, PacketSize},
+      Result);
+  ASSERT_EQ(Result[0].get<int32_t>(), 0);
+
+  FuncInst =
+      AVCodecMod->findFuncExports("wasmedge_ffmpeg_avcodec_av_packet_data");
+  auto &HostFuncAVPacketData =
+      dynamic_cast<WasmEdge::Host::WasmEdgeFFmpeg::AVcodec::AVPacketData &>(
+          FuncInst->getHostFunc());
+
+  // The destination buffer is larger than the packet data and is fenced with a
+  // sentinel; a guest length larger than AvPacket->size must not make the host
+  // read past the packet into adjacent host memory.
+  uint32_t DataPtr = UINT32_C(200);
+  uint32_t DataLen = PacketSize + UINT32_C(24);
+  fillMemContent(MemInst, DataPtr, DataLen, UINT8_C(0xAA));
+  HostFuncAVPacketData.run(
+      CallFrame,
+      std::initializer_list<WasmEdge::ValVariant>{PacketId, DataPtr, DataLen},
+      Result);
+  EXPECT_EQ(Result[0].get<int32_t>(), static_cast<int32_t>(ErrNo::Success));
+
+  char *Buf = MemInst->getPointer<char *>(DataPtr);
+  for (uint32_t I = PacketSize; I < DataLen; ++I) {
+    EXPECT_EQ(static_cast<uint8_t>(Buf[I]), UINT8_C(0xAA));
+  }
+}
+
 } // namespace WasmEdgeFFmpeg
 } // namespace Host
 } // namespace WasmEdge

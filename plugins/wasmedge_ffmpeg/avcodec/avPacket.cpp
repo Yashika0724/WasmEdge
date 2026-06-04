@@ -160,8 +160,17 @@ Expect<int32_t> AVPacketData::body(const Runtime::CallingFrame &Frame,
   MEM_SPAN_CHECK(Buffer, MemInst, uint8_t, DataPtr, DataLen, "");
 
   FFMPEG_PTR_FETCH(AvPacket, AvPacketId, AVPacket);
-  uint8_t *Data = AvPacket->data;
-  std::copy_n(Data, DataLen, Buffer.data());
+  if (AvPacket == nullptr || AvPacket->data == nullptr || AvPacket->size < 0) {
+    spdlog::error("[WasmEdge-FFmpeg] AVPacketData: invalid packet id {} or "
+                  "packet has no readable data"sv,
+                  AvPacketId);
+    return static_cast<int32_t>(ErrNo::InternalError);
+  }
+  uint32_t CopyLen = DataLen;
+  if (static_cast<uint32_t>(AvPacket->size) < DataLen) {
+    CopyLen = static_cast<uint32_t>(AvPacket->size);
+  }
+  std::copy_n(AvPacket->data, CopyLen, Buffer.data());
   return static_cast<int32_t>(ErrNo::Success);
 }
 
