@@ -166,11 +166,13 @@ Expect<int32_t> AVPacketData::body(const Runtime::CallingFrame &Frame,
                   AvPacketId);
     return static_cast<int32_t>(ErrNo::InternalError);
   }
-  uint32_t CopyLen = DataLen;
   if (static_cast<uint32_t>(AvPacket->size) < DataLen) {
-    CopyLen = static_cast<uint32_t>(AvPacket->size);
+    spdlog::error("[WasmEdge-FFmpeg] AVPacketData: requested {} bytes from "
+                  "packet id {}, but only {} bytes are readable"sv,
+                  DataLen, AvPacketId, AvPacket->size);
+    return static_cast<int32_t>(ErrNo::InternalError);
   }
-  std::copy_n(AvPacket->data, CopyLen, Buffer.data());
+  std::copy_n(AvPacket->data, DataLen, Buffer.data());
   return static_cast<int32_t>(ErrNo::Success);
 }
 

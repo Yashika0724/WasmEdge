@@ -684,8 +684,9 @@ TEST_F(FFmpegTest, SwsGetCoeffBounds) {
           FuncInst->getHostFunc());
 
   // The vector holds VecLength doubles; the destination is larger and fenced
-  // with a sentinel. A guest length beyond the coeff array must be clamped so
-  // the host cannot read past it into adjacent host memory.
+  // with a sentinel. A guest length beyond the coeff array must be rejected
+  // outright, since a partial copy reported as success would let the guest
+  // consume the stale tail of its buffer as coefficient data.
   uint32_t Available = static_cast<uint32_t>(VecLength) * sizeof(double);
   uint32_t CoeffPtr = UINT32_C(200);
   uint32_t Len = Available + UINT32_C(24);
@@ -694,12 +695,20 @@ TEST_F(FFmpegTest, SwsGetCoeffBounds) {
       CallFrame,
       std::initializer_list<WasmEdge::ValVariant>{SwsVecId, CoeffPtr, Len},
       Result);
-  EXPECT_EQ(Result[0].get<int32_t>(), static_cast<int32_t>(ErrNo::Success));
+  EXPECT_EQ(Result[0].get<int32_t>(),
+            static_cast<int32_t>(ErrNo::InternalError));
 
   char *Buf = MemInst->getPointer<char *>(CoeffPtr);
-  for (uint32_t I = Available; I < Len; ++I) {
+  for (uint32_t I = 0; I < Len; ++I) {
     EXPECT_EQ(static_cast<uint8_t>(Buf[I]), UINT8_C(0xAA));
   }
+
+  // A request bounded by the coefficient array still succeeds.
+  HostFuncSwsGetCoeff.run(CallFrame,
+                          std::initializer_list<WasmEdge::ValVariant>{
+                              SwsVecId, CoeffPtr, Available},
+                          Result);
+  EXPECT_EQ(Result[0].get<int32_t>(), static_cast<int32_t>(ErrNo::Success));
 }
 
 } // namespace WasmEdgeFFmpeg

@@ -401,8 +401,9 @@ TEST_F(FFmpegTest, AVPacketDataBounds) {
           FuncInst->getHostFunc());
 
   // The destination buffer is larger than the packet data and is fenced with a
-  // sentinel; a guest length larger than AvPacket->size must not make the host
-  // read past the packet into adjacent host memory.
+  // sentinel; a guest length larger than AvPacket->size must be rejected
+  // outright, since a partial copy reported as success would let the guest
+  // consume the stale tail of its buffer as packet data.
   uint32_t DataPtr = UINT32_C(200);
   uint32_t DataLen = PacketSize + UINT32_C(24);
   fillMemContent(MemInst, DataPtr, DataLen, UINT8_C(0xAA));
@@ -410,12 +411,20 @@ TEST_F(FFmpegTest, AVPacketDataBounds) {
       CallFrame,
       std::initializer_list<WasmEdge::ValVariant>{PacketId, DataPtr, DataLen},
       Result);
-  EXPECT_EQ(Result[0].get<int32_t>(), static_cast<int32_t>(ErrNo::Success));
+  EXPECT_EQ(Result[0].get<int32_t>(),
+            static_cast<int32_t>(ErrNo::InternalError));
 
   char *Buf = MemInst->getPointer<char *>(DataPtr);
-  for (uint32_t I = PacketSize; I < DataLen; ++I) {
+  for (uint32_t I = 0; I < DataLen; ++I) {
     EXPECT_EQ(static_cast<uint8_t>(Buf[I]), UINT8_C(0xAA));
   }
+
+  // A request bounded by the packet size still succeeds.
+  HostFuncAVPacketData.run(CallFrame,
+                           std::initializer_list<WasmEdge::ValVariant>{
+                               PacketId, DataPtr, PacketSize},
+                           Result);
+  EXPECT_EQ(Result[0].get<int32_t>(), static_cast<int32_t>(ErrNo::Success));
 }
 
 } // namespace WasmEdgeFFmpeg

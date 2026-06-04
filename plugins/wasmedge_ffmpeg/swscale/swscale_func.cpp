@@ -249,11 +249,13 @@ Expect<int32_t> SwsGetCoeff::body(const Runtime::CallingFrame &Frame,
     return static_cast<int32_t>(ErrNo::InternalError);
   }
   size_t const Available = static_cast<size_t>(Vector->length) * sizeof(double);
-  uint32_t CopyLen = Len;
   if (Available < static_cast<size_t>(Len)) {
-    CopyLen = static_cast<uint32_t>(Available);
+    spdlog::error("[WasmEdge-FFmpeg] SwsGetCoeff: requested {} bytes from "
+                  "scaler vector id {}, but only {} bytes are readable"sv,
+                  Len, SwsVectorId, Available);
+    return static_cast<int32_t>(ErrNo::InternalError);
   }
-  std::copy_n(reinterpret_cast<const uint8_t *>(Vector->coeff), CopyLen,
+  std::copy_n(reinterpret_cast<const uint8_t *>(Vector->coeff), Len,
               Buffer.data());
   return static_cast<int32_t>(ErrNo::Success);
 }
