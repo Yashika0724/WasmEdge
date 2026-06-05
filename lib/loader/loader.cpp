@@ -17,8 +17,7 @@
 
 using namespace std::literals;
 
-namespace {
-std::string generateID() {
+std::string WasmEdge::Loader::Loader::generateID() {
   static const std::string Characters =
       "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
   static std::mutex M;
@@ -32,7 +31,6 @@ std::string generateID() {
   }
   return Result;
 }
-} // namespace
 
 namespace WasmEdge {
 namespace Loader {

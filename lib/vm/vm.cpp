@@ -295,6 +295,15 @@ Expect<void> VM::unsafeRegisterModule(std::string_view Name,
   // Validate module.
   EXPECTED_TRY(ValidatorEngine.validate(Module));
 
+  // LazyJIT keys its lazy-compilation state on the module ID. A module handed
+  // in already-parsed (e.g. parsed outside LazyJIT mode) may have none, so
+  // assign one before it is captured below and used for the JIT compilation
+  // state.
+  if (Conf.getRuntimeConfigure().getRunMode() == RunMode::LazyJIT &&
+      Module.getID().empty()) {
+    const_cast<AST::Module &>(Module).setID(Loader::Loader::generateID());
+  }
+
   std::string ID = Module.getID();
 
 #ifdef WASMEDGE_USE_LLVM
@@ -540,6 +549,14 @@ Expect<void> VM::unsafeLoadWasm(Span<const Byte> Code) {
 
 Expect<void> VM::unsafeLoadWasm(const AST::Module &Module) {
   Mod = std::make_unique<AST::Module>(Module);
+  // LazyJIT keys its lazy-compilation state on the module ID. A module that was
+  // parsed outside LazyJIT mode and handed in already-parsed here has none, so
+  // assign one; otherwise lazy compilation is skipped and indirect calls
+  // dereference an uncompiled stub.
+  if (Conf.getRuntimeConfigure().getRunMode() == RunMode::LazyJIT &&
+      Mod->getID().empty()) {
+    Mod->setID(Loader::Loader::generateID());
+  }
   Stage = VMStage::Loaded;
   return {};
 }

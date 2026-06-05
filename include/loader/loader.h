@@ -226,6 +226,11 @@ public:
   static Expect<std::vector<Byte>>
   loadFile(const std::filesystem::path &FilePath);
 
+  /// Generate a random 10-character module ID. LazyJIT keys its compilation
+  /// state on this ID, so a module must have one before it is run in LazyJIT
+  /// mode (see Loader::loadUnit and VM::loadWasm).
+  static std::string generateID();
+
   /// Parse module or component from file path.
   Expect<std::variant<std::unique_ptr<AST::Component::Component>,
                       std::unique_ptr<AST::Module>>>
