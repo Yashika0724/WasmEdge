@@ -703,24 +703,42 @@ TEST(RunSubcommand, ParseRunModeArg) {
 // InstantiateSubcommand tests
 // ---------------------------------------------------------------------------
 
-TEST(InstantiateSubcommand, ErrorHandling) {
+TEST(InstantiateSubcommand, ErrorHandling_NoArg) {
   EXPECT_NE(callInstantiate({}), EXIT_SUCCESS);
-  EXPECT_NE(callInstantiate({""}), EXIT_SUCCESS);
-  EXPECT_NE(callInstantiate({nonExistPath().c_str()}), EXIT_SUCCESS);
-  EXPECT_NE(callInstantiate({TestDataPath.c_str()}), EXIT_SUCCESS);
+}
 
+TEST(InstantiateSubcommand, ErrorHandling_EmptyArg) {
+  EXPECT_NE(callInstantiate({""}), EXIT_SUCCESS);
+}
+
+TEST(InstantiateSubcommand, ErrorHandling_NonExist) {
+  EXPECT_NE(callInstantiate({nonExistPath().c_str()}), EXIT_SUCCESS);
+}
+
+TEST(InstantiateSubcommand, ErrorHandling_Directory) {
+  EXPECT_NE(callInstantiate({TestDataPath.c_str()}), EXIT_SUCCESS);
+}
+
+TEST(InstantiateSubcommand, ErrorHandling_Truncated) {
   std::string TruncPath =
       writeWasmToFile(TruncatedWasm.data(), TruncatedWasm.size(), "trunc.wasm");
   EXPECT_NE(callInstantiate({TruncPath.c_str()}), EXIT_SUCCESS);
   std::filesystem::remove(TruncPath.c_str());
+}
 
+TEST(InstantiateSubcommand, ErrorHandling_NotWasm) {
   std::string ElfPath =
       writeWasmToFile(NotWasmBytes.data(), NotWasmBytes.size(), "elf.wasm");
   EXPECT_NE(callInstantiate({ElfPath.c_str()}), EXIT_SUCCESS);
   std::filesystem::remove(ElfPath.c_str());
+}
 
+TEST(InstantiateSubcommand, ErrorHandling_UnknownFlag) {
   EXPECT_NE(callInstantiate({"--no-such-flag", simplePath().c_str()}),
             EXIT_SUCCESS);
+}
+
+TEST(InstantiateSubcommand, ErrorHandling_ExtraArg) {
   EXPECT_NE(callInstantiate({simplePath().c_str(), "extra-arg"}), EXIT_SUCCESS);
 }
 
