@@ -2,7 +2,10 @@
 # SPDX-FileCopyrightText: 2019-2024 Second State INC
 
 set(WASMEDGE_INTERPROCEDURAL_OPTIMIZATION OFF)
-if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
+# Require CMAKE_BUILD_TYPE to be set (single-config generators): an empty value,
+# as used by multi-config generators such as Visual Studio and Xcode, also fails
+# the "Debug" match and would otherwise force IPO/LTO on for Debug builds.
+if(CMAKE_BUILD_TYPE AND NOT CMAKE_BUILD_TYPE MATCHES "Debug")
   if(NOT WASMEDGE_FORCE_DISABLE_LTO)
     set(WASMEDGE_INTERPROCEDURAL_OPTIMIZATION ON)
   endif()
