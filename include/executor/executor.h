@@ -22,6 +22,7 @@
 #include "common/errcode.h"
 #include "common/statistics.h"
 #include "common/types.h"
+#include "gc/allocator.h"
 #include "runtime/callingframe.h"
 #include "runtime/instance/component/component.h"
 #include "runtime/instance/module.h"
@@ -158,7 +159,10 @@ public:
   /// Getter for configuration.
   const Configure &getConfigure() const { return Conf; }
 
-  /// Instantiate a WASM Module as an anonymous module instance.
+  /// Getter of Allocator
+  GC::Allocator &getAllocator() noexcept { return Allocator; }
+
+  /// Instantiate a WASM Module into an anonymous module instance.
   Expect<std::unique_ptr<Runtime::Instance::ModuleInstance>>
   instantiateModule(Runtime::StoreManager &StoreMgr, const AST::Module &Mod);
 
@@ -1174,6 +1178,9 @@ private:
     }
     return {};
   }
+
+  /// GC Allocator
+  GC::Allocator Allocator;
 };
 
 } // namespace Executor

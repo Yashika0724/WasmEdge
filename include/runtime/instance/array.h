@@ -16,48 +16,79 @@
 #include "ast/type.h"
 #include "common/span.h"
 #include "common/types.h"
-#include "runtime/instance/composite.h"
+#include "gc/allocator.h"
+#include "runtime/instance/gc.h"
 
+#include <algorithm>
+#include <limits>
 #include <vector>
 
-namespace WasmEdge {
-namespace Runtime {
-namespace Instance {
+namespace WasmEdge::Runtime::Instance {
 
-class ArrayInstance : public CompositeBase {
+class ArrayInstance : public GCInstance {
 public:
   ArrayInstance() = delete;
-  ArrayInstance(const ModuleInstance *Mod, const uint32_t Idx,
-                const uint32_t Size, const ValVariant &Init) noexcept
-      : CompositeBase(Mod, Idx), Data(Size, Init) {
-    assuming(ModInst);
+  ArrayInstance(GC::Allocator &Allocator, const ModuleInstance *ModInst,
+                uint32_t TypeIdx, const uint32_t Size,
+                const ValVariant &Init) noexcept {
+    assuming(Size <= (std::numeric_limits<uint32_t>::max() - sizeof(RawData)) /
+                         sizeof(ValVariant));
+    Data = static_cast<RawData *>(Allocator.allocate(
+        [&](void *Pointer) {
+          auto Raw = static_cast<RawData *>(Pointer);
+          Raw->ModInst = ModInst;
+          Raw->TypeIdx = TypeIdx;
+          Raw->Length = Size;
+          std::fill(Raw->Data, Raw->Data + Size, Init);
+        },
+        static_cast<uint32_t>(sizeof(RawData) + Size * sizeof(ValVariant))));
   }
-  ArrayInstance(const ModuleInstance *Mod, const uint32_t Idx,
-                std::vector<ValVariant> &&Init) noexcept
-      : CompositeBase(Mod, Idx), Data(std::move(Init)) {
-    assuming(ModInst);
+  ArrayInstance(GC::Allocator &Allocator, const ModuleInstance *ModInst,
+                uint32_t TypeIdx, std::vector<ValVariant> &&Init) noexcept {
+    assuming(Init.size() <=
+             (std::numeric_limits<uint32_t>::max() - sizeof(RawData)) /
+                 sizeof(ValVariant));
+    Data = static_cast<RawData *>(Allocator.allocate(
+        [&](void *Pointer) {
+          auto Raw = static_cast<RawData *>(Pointer);
+          Raw->ModInst = ModInst;
+          Raw->TypeIdx = TypeIdx;
+          Raw->Length = static_cast<uint32_t>(Init.size());
+          std::copy(Init.begin(), Init.end(), Raw->Data);
+        },
+        static_cast<uint32_t>(sizeof(RawData) +
+                              Init.size() * sizeof(ValVariant))));
   }
+  ArrayInstance(RawData *Raw) noexcept : GCInstance(Raw) {}
 
   /// Get field data in array instance.
-  ValVariant &getData(uint32_t Idx) noexcept { return Data[Idx]; }
-  const ValVariant &getData(uint32_t Idx) const noexcept { return Data[Idx]; }
+  /// Data may be null only on allocation failure, which arrayNew() turns into a
+  /// trap before any instance reaches these accessors; callers reach them only
+  /// after a null-reference check.
+  ValVariant &getData(uint32_t Idx) noexcept {
+    assuming(Data);
+    return Data->Data[Idx];
+  }
+  const ValVariant &getData(uint32_t Idx) const noexcept {
+    assuming(Data);
+    return Data->Data[Idx];
+  }
 
   /// Get full array.
-  Span<ValVariant> getArray() noexcept { return Data; }
-  Span<const ValVariant> getArray() const noexcept { return Data; }
+  Span<ValVariant> getArray() noexcept {
+    assuming(Data);
+    return {Data->Data, Data->Length};
+  }
+  Span<const ValVariant> getArray() const noexcept {
+    assuming(Data);
+    return {Data->Data, Data->Length};
+  }
 
   /// Get array length.
   uint32_t getLength() const noexcept {
-    return static_cast<uint32_t>(Data.size());
+    assuming(Data);
+    return Data->Length;
   }
-
-private:
-  /// \name Data of array instance.
-  /// @{
-  std::vector<ValVariant> Data;
-  /// @}
 };
 
-} // namespace Instance
-} // namespace Runtime
-} // namespace WasmEdge
+} // namespace WasmEdge::Runtime::Instance
