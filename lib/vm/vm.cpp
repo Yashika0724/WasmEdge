@@ -256,13 +256,12 @@ Expect<void> VM::unsafeRegisterModule(std::string_view Name,
   EXPECTED_TRY(std::shared_ptr<AST::Module> Module,
                LoaderEngine.parseModule(Path));
 
-  EXPECTED_TRY(unsafeRegisterModule(Name, *Module));
-
-  if (!RegASTModules.empty()) {
-    RegASTModules.back() = Module;
-  }
-
-  return {};
+  // unsafeRegisterModule already keeps the module it registers alive in
+  // RegASTModules (in LazyJIT mode that is a private copy carrying the
+  // generated ID and patched executable symbols). Do not overwrite that entry
+  // with the freshly parsed Module: it lacks the LazyJIT ID/symbols, so doing
+  // so would break the RegModMap/LazyJITStates key invariant.
+  return unsafeRegisterModule(Name, *Module);
 }
 
 Expect<void> VM::unsafeRegisterModule(std::string_view Name,
@@ -276,13 +275,10 @@ Expect<void> VM::unsafeRegisterModule(std::string_view Name,
   EXPECTED_TRY(std::shared_ptr<AST::Module> Module,
                LoaderEngine.parseModule(Code));
 
-  EXPECTED_TRY(unsafeRegisterModule(Name, *Module));
-
-  if (!RegASTModules.empty()) {
-    RegASTModules.back() = Module;
-  }
-
-  return {};
+  // See the path overload above: keep the module unsafeRegisterModule actually
+  // registered (with its LazyJIT ID/symbols) rather than overwriting the
+  // RegASTModules entry with the freshly parsed Module.
+  return unsafeRegisterModule(Name, *Module);
 }
 
 Expect<void> VM::unsafeRegisterModule(std::string_view Name,
@@ -295,28 +291,35 @@ Expect<void> VM::unsafeRegisterModule(std::string_view Name,
   // Validate module.
   EXPECTED_TRY(ValidatorEngine.validate(Module));
 
-  // LazyJIT keys its lazy-compilation state on the module ID. A module handed
-  // in already-parsed (e.g. parsed outside LazyJIT mode) may have none, so
-  // assign one before it is captured below and used for the JIT compilation
-  // state.
-  if (Conf.getRuntimeConfigure().getRunMode() == RunMode::LazyJIT &&
-      Module.getID().empty()) {
-    const_cast<AST::Module &>(Module).setID(Loader::Loader::generateID());
+  // LazyJIT keys its lazy-compilation state on the module ID and attaches a
+  // compiled symbol to the module; both mutate it. A module handed in
+  // already-parsed (e.g. parsed outside LazyJIT mode) may have no ID. Work on a
+  // private mutable copy in LazyJIT mode rather than const_cast-ing the
+  // caller's const Module — that would be undefined behavior if the module is
+  // truly const, and a surprising side effect otherwise. Other modes only read
+  // the module.
+  std::shared_ptr<AST::Module> OwnedModule;
+  if (Conf.getRuntimeConfigure().getRunMode() == RunMode::LazyJIT) {
+    OwnedModule = std::make_shared<AST::Module>(Module);
+    if (OwnedModule->getID().empty()) {
+      OwnedModule->setID(Loader::Loader::generateID());
+    }
   }
+  const AST::Module &Mod = OwnedModule ? *OwnedModule : Module;
 
-  std::string ID = Module.getID();
+  std::string ID = Mod.getID();
 
 #ifdef WASMEDGE_USE_LLVM
   std::optional<WasmEdge::LLVM::LazyJITState> State;
   if (Conf.getRuntimeConfigure().getRunMode() == RunMode::LazyJIT &&
-      !Module.getSymbol()) {
-    EXPECTED_TRY(State, prepareLazyJIT(const_cast<AST::Module &>(Module)));
+      !Mod.getSymbol()) {
+    EXPECTED_TRY(State, prepareLazyJIT(*OwnedModule));
   }
 #endif
 
   // Instantiate and register module.
   EXPECTED_TRY(auto ModInst,
-               ExecutorEngine.registerModule(StoreRef, Module, Name));
+               ExecutorEngine.registerModule(StoreRef, Mod, Name));
   RegModInsts.push_back(std::move(ModInst));
 
 #ifdef WASMEDGE_USE_LLVM
@@ -333,7 +336,7 @@ Expect<void> VM::unsafeRegisterModule(std::string_view Name,
     if (It != RegModMap.end()) {
       It->second[1] = InstIdx;
     } else {
-      RegASTModules.push_back(std::make_shared<const AST::Module>(Module));
+      RegASTModules.push_back(OwnedModule);
       RegModMap[ID] = {RegASTModules.size() - 1, InstIdx};
     }
   }
