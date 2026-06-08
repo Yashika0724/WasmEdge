@@ -210,30 +210,48 @@ bool Allocator::manualCollect(Span<uint8_t *const> Stack) noexcept {
   }
   NextGC.store(std::chrono::steady_clock::now() + std::chrono::seconds(1),
                std::memory_order_release);
+  // Conservative root scanning: intentionally reads data that may be
+  // concurrently modified by execution threads. Suppress TSan for these reads.
+  TSAN_IGNORE_READS_BEGIN();
   for (const auto &Val : Stack) {
     markGray(getPointer(Val));
   }
+  TSAN_IGNORE_READS_END();
   {
     std::unique_lock<std::mutex> Locker(StackMutex);
+    TSAN_IGNORE_READS_BEGIN();
     for (auto V : Stacks) {
       for (const auto &Val : *V) {
         markGray(getPointer(Val));
       }
     }
+    TSAN_IGNORE_READS_END();
   }
   {
     std::unique_lock<std::mutex> Locker(HeapMutex);
+    TSAN_IGNORE_READS_BEGIN();
     for (auto T : Heaps) {
       for (const auto &Ref : T->Refs) {
         markGray(getPointer(Ref));
       }
     }
+    TSAN_IGNORE_READS_END();
   }
   {
     std::unique_lock<std::mutex> Locker(GlobalMutex);
+    TSAN_IGNORE_READS_BEGIN();
     for (auto G : Globals) {
       markGray(getPointer(G->Value));
     }
+    TSAN_IGNORE_READS_END();
+  }
+  {
+    std::unique_lock<std::mutex> Locker(HostRootsMutex);
+    TSAN_IGNORE_READS_BEGIN();
+    for (const auto &Ptr : HostRoots) {
+      markGray(Ptr);
+    }
+    TSAN_IGNORE_READS_END();
   }
   CurrentGCState.store(GCState::MarkingGray, std::memory_order_release);
   std::unique_lock<std::mutex> Locker(GCMutex);
@@ -259,31 +277,47 @@ void Allocator::autoCollect(Span<uint8_t *const> Stack) noexcept {
   }
   NextGC.store(std::chrono::steady_clock::now() + std::chrono::seconds(1),
                std::memory_order_release);
-  // mark root gray
+  // Conservative root scanning (see manualCollect for rationale).
+  TSAN_IGNORE_READS_BEGIN();
   for (const auto &Val : Stack) {
     markGray(getPointer(Val));
   }
+  TSAN_IGNORE_READS_END();
   {
     std::unique_lock<std::mutex> Locker(StackMutex);
+    TSAN_IGNORE_READS_BEGIN();
     for (auto V : Stacks) {
       for (const auto &Val : *V) {
         markGray(getPointer(Val));
       }
     }
+    TSAN_IGNORE_READS_END();
   }
   {
     std::unique_lock<std::mutex> Locker(HeapMutex);
+    TSAN_IGNORE_READS_BEGIN();
     for (auto T : Heaps) {
       for (const auto &Ref : T->Refs) {
         markGray(getPointer(Ref));
       }
     }
+    TSAN_IGNORE_READS_END();
   }
   {
     std::unique_lock<std::mutex> Locker(GlobalMutex);
+    TSAN_IGNORE_READS_BEGIN();
     for (auto G : Globals) {
       markGray(getPointer(G->Value));
     }
+    TSAN_IGNORE_READS_END();
+  }
+  {
+    std::unique_lock<std::mutex> Locker(HostRootsMutex);
+    TSAN_IGNORE_READS_BEGIN();
+    for (const auto &Ptr : HostRoots) {
+      markGray(Ptr);
+    }
+    TSAN_IGNORE_READS_END();
   }
   CurrentGCState.store(GCState::MarkingGray, std::memory_order_release);
   GCCV.notify_all();
@@ -363,6 +397,36 @@ void Allocator::removeGlobal(
   if (It != Globals.end()) {
     Globals.erase(It);
   }
+}
+
+void Allocator::retainResult(const RefVariant &Ref) noexcept {
+  std::unique_lock<std::mutex> Locker(HostRootsMutex);
+  HostRoots.emplace_back(Ref.getPtr<uint8_t>());
+}
+
+WASMEDGE_EXPORT void Allocator::releaseRef(const RefVariant &Ref) noexcept {
+  if (Stop.load(std::memory_order_acquire) == true) {
+    return;
+  }
+  std::unique_lock<std::mutex> Locker(HostRootsMutex);
+  // Scan from the back: retainResult appends, so a LIFO release pattern finds
+  // its match quickly. Remove via swap-with-back + pop_back -- HostRoots is an
+  // unordered bag matched by pointer identity, so order does not matter and any
+  // single matching instance is interchangeable.
+  auto It =
+      std::find(HostRoots.rbegin(), HostRoots.rend(), Ref.getPtr<uint8_t>());
+  if (It != HostRoots.rend()) {
+    *It = HostRoots.back();
+    HostRoots.pop_back();
+  }
+}
+
+WASMEDGE_EXPORT void Allocator::releaseAllRefs() noexcept {
+  if (Stop.load(std::memory_order_acquire) == true) {
+    return;
+  }
+  std::unique_lock<std::mutex> Locker(HostRootsMutex);
+  HostRoots.clear();
 }
 
 void Allocator::markGray(uint8_t *Pointer) noexcept {

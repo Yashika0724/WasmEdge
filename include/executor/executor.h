@@ -40,6 +40,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace WasmEdge {
@@ -223,6 +224,31 @@ public:
   invoke(const Runtime::Instance::Component::FunctionInstance *FuncInst,
          Span<const ComponentValVariant> Params,
          Span<const ComponentValType> ParamTypes);
+
+  /// Release a host-retained GC reference returned to the host.
+  void releaseRef(const RefVariant &Ref) noexcept { Allocator.releaseRef(Ref); }
+
+  /// Release several host-retained GC references.
+  void releaseRefs(Span<const RefVariant> Refs) noexcept {
+    Allocator.releaseRefs(Refs);
+  }
+
+  /// Release a host-retained GC reference delivered as a component value.
+  void releaseRef(const ComponentValVariant &Val) noexcept {
+    if (std::holds_alternative<ValVariant>(Val)) {
+      Allocator.releaseRef(std::get<ValVariant>(Val).get<RefVariant>());
+    }
+  }
+
+  /// Release several host-retained GC references delivered as component values.
+  void releaseRefs(Span<const ComponentValVariant> Vals) noexcept {
+    for (const auto &Val : Vals) {
+      releaseRef(Val);
+    }
+  }
+
+  /// Release all host-retained GC references.
+  void releaseAllRefs() noexcept { Allocator.releaseAllRefs(); }
 
   /// Asynchronous invoke a WASM function by function instance.
   Async<Expect<std::vector<std::pair<ValVariant, ValType>>>>

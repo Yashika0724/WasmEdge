@@ -161,7 +161,13 @@ Executor::invoke(const Runtime::Instance::FunctionInstance *FuncInst,
   // Get return values.
   std::vector<std::pair<ValVariant, ValType>> Returns(RTypes.size());
   for (uint32_t I = 0; I < RTypes.size(); ++I) {
-    auto Val = StackMgr.pop<ValVariant>();
+    // Peek (do not pop yet): retention below must happen while the value is
+    // still on the value stack, which is a registered GC root. Popping first
+    // would leave the object reachable only via this thread's native-stack
+    // local during the window before retainResult, and a collection running
+    // on another thread does not scan this thread's stack -- so the object
+    // could be swept before it is retained.
+    auto Val = StackMgr.peekTop<ValVariant>();
     const auto &RType = RTypes[RTypes.size() - I - 1];
     if (RType.isRefType()) {
       // For the reference type cases of the return values, they should be
@@ -172,24 +178,44 @@ Executor::invoke(const Runtime::Instance::FunctionInstance *FuncInst,
         RefType = ValType(TypeCode::Ref, TypeCode::ExternRef);
       }
       if (!RefType.isAbsHeapType()) {
-        // The instance must not be nullptr because the null references are
-        // already dynamic typed into the top abstract heap type.
-        auto *Inst = Val.get<RefVariant>()
-                         .getPtr<Runtime::Instance::GCInstance::RawData>();
-        assuming(Inst);
+        // A concrete heap type is either a GC struct/array (payload is
+        // GCInstance::RawData) or a typed function reference (payload is a
+        // CompositeBase / FunctionInstance). Both layouts begin with the
+        // defining `const ModuleInstance *`, which is all that is read here, so
+        // obtain it through CompositeBase rather than assuming the GC RawData
+        // layout (which would misinterpret a typed funcref). The reference must
+        // not be nullptr because null references are already dynamic-typed into
+        // the top abstract heap type.
+        const auto *ModInst = Val.get<RefVariant>()
+                                  .getPtr<Runtime::Instance::CompositeBase>()
+                                  ->getModule();
         // The ModInst may be nullptr only in the independent host function
         // instance. Therefore the module instance here must not be nullptr
         // because the independent host function instance cannot be imported and
         // be referred by instructions.
-        const auto *ModInst = Inst->ModInst;
+        assuming(ModInst);
         auto *DefType = *ModInst->getType(RefType.getTypeIndex());
         RefType =
             ValType(RefType.getCode(), DefType->getCompositeType().expand());
       }
+      // Retain GC-managed (struct/array) references returned to the host so the
+      // collector keeps them alive until the host releases them. The ref's
+      // runtime type was just resolved above, so struct/array are already
+      // distinguishable from funcref/externref; null and i31 are excluded. This
+      // runs while the value is still on the stack, so the object is rooted by
+      // the value stack until it lands in HostRoots -- no collectible window.
+      const auto &RetRef = Val.get<RefVariant>();
+      if (!RetRef.isNull() &&
+          (RefType.getHeapTypeCode() == TypeCode::StructRef ||
+           RefType.getHeapTypeCode() == TypeCode::ArrayRef)) {
+        Allocator.retainResult(RetRef);
+      }
+      StackMgr.pop<ValVariant>();
       // Should use the value type from the reference here due to the dynamic
       // typing rule of the null references.
       Returns[RTypes.size() - I - 1] = std::make_pair(Val, RefType);
     } else {
+      StackMgr.pop<ValVariant>();
       // For the number type cases of the return values, the unused bits should
       // be erased due to the security issue.
       cleanNumericVal(Val, RType);

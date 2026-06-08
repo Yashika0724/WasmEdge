@@ -129,6 +129,26 @@ public:
 
   void removeGlobal(Runtime::Instance::GlobalInstance &Global) noexcept;
 
+  /// Host-root retention for GC references handed back to the host.
+  ///
+  /// retainResult pins a reference as a GC root so the collector keeps the
+  /// pointed-to object alive. References are matched by pointer identity
+  /// (ValType is ignored), and retention is by multiplicity: a reference
+  /// retained N times must be released N times. releaseRef removes one
+  /// retained instance, releaseRefs removes one instance of each, and
+  /// releaseAllRefs drops every retained reference.
+  void retainResult(const RefVariant &Ref) noexcept;
+
+  WASMEDGE_EXPORT void releaseRef(const RefVariant &Ref) noexcept;
+
+  void releaseRefs(Span<const RefVariant> Refs) noexcept {
+    for (const auto &Ref : Refs) {
+      releaseRef(Ref);
+    }
+  }
+
+  WASMEDGE_EXPORT void releaseAllRefs() noexcept;
+
   static Span<uint8_t *const> getStack() noexcept;
 
 private:
@@ -174,6 +194,9 @@ private:
   std::vector<Runtime::Instance::TableInstance *> Heaps;
   std::mutex GlobalMutex{};
   std::vector<Runtime::Instance::GlobalInstance *> Globals;
+
+  std::mutex HostRootsMutex{};
+  std::vector<uint8_t *> HostRoots;
 
   std::mutex Set1Mutex{};
   std::unordered_set<Header *> Set1;

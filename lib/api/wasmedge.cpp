@@ -3536,6 +3536,45 @@ WASMEDGE_CAPI_EXPORT void WasmEdge_VMCleanup(WasmEdge_VMContext *Cxt) noexcept {
 }
 
 WASMEDGE_CAPI_EXPORT void
+WasmEdge_VMReleaseRef(WasmEdge_VMContext *Cxt,
+                      const WasmEdge_Value Ref) noexcept {
+  // Only reference-typed values carry a managed pointer; reinterpreting a
+  // numeric value's payload as a RefVariant would release a bogus pointer.
+  if (Cxt && genValType(Ref.Type).isRefType()) {
+    Cxt->VM.releaseRef(ValVariant::wrap<RefVariant>(
+                           to_WasmEdge_128_t<WasmEdge::uint128_t>(Ref.Value))
+                           .get<RefVariant>());
+  }
+}
+
+WASMEDGE_CAPI_EXPORT void WasmEdge_VMReleaseRefs(WasmEdge_VMContext *Cxt,
+                                                 const WasmEdge_Value *Refs,
+                                                 const uint32_t Len) noexcept {
+  if (Cxt && Refs) {
+    std::vector<RefVariant> Vec;
+    Vec.reserve(Len);
+    for (uint32_t I = 0; I < Len; ++I) {
+      // Skip non-reference values; their payload is not a managed pointer.
+      if (!genValType(Refs[I].Type).isRefType()) {
+        continue;
+      }
+      Vec.emplace_back(
+          ValVariant::wrap<RefVariant>(
+              to_WasmEdge_128_t<WasmEdge::uint128_t>(Refs[I].Value))
+              .get<RefVariant>());
+    }
+    Cxt->VM.releaseRefs(Vec);
+  }
+}
+
+WASMEDGE_CAPI_EXPORT void
+WasmEdge_VMReleaseAllRefs(WasmEdge_VMContext *Cxt) noexcept {
+  if (Cxt) {
+    Cxt->VM.releaseAllRefs();
+  }
+}
+
+WASMEDGE_CAPI_EXPORT void
 WasmEdge_VMDeleteRegisteredModule(const WasmEdge_VMContext *Cxt,
                                   const WasmEdge_String ModuleName) noexcept {
   if (!Cxt || !ModuleName.Buf) {
