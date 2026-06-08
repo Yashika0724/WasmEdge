@@ -98,6 +98,11 @@ public:
     }
     Refs.resize(Refs.size() + Count);
     std::fill_n(Refs.end() - static_cast<std::ptrdiff_t>(Count), Count, Val);
+    // The new slots join this table's GC roots after the root snapshot; shade
+    // the broadcast reference so a concurrent collection keeps it alive.
+    if (Allocator) {
+      Allocator->writeBarrier(Val);
+    }
     TabType.getLimit().setMin(Min + Count);
     return true;
   }
@@ -130,11 +135,27 @@ public:
 
     auto Write = Span<RefVariant>(Refs).subspan(Dst, Slice.size());
 
-    // Copy the references.
-    if (Write.begin() <= Slice.begin() || Write.begin() >= Slice.end()) {
-      std::copy(Slice.begin(), Slice.end(), Write.begin());
-    } else {
+    // Table slots are GC roots; shade both the overwritten and the newly
+    // stored references so a concurrent collection started before this write
+    // does not reclaim a still-reachable object.
+    if (Allocator) {
+      Allocator->bulkWriteBarrier(Span<const RefVariant>(Write));
+      Allocator->bulkWriteBarrier(Slice);
+    }
+
+    // Copy the references. Slice may alias this table's storage, so detect a
+    // genuine overlap using integer addresses; relational comparison of
+    // pointers from potentially distinct arrays would be unspecified behavior.
+    const auto WriteAddr = reinterpret_cast<uintptr_t>(Write.data());
+    const auto SliceBeginAddr = reinterpret_cast<uintptr_t>(Slice.data());
+    const auto SliceEndAddr =
+        reinterpret_cast<uintptr_t>(Slice.data() + Slice.size());
+    if (WriteAddr > SliceBeginAddr && WriteAddr < SliceEndAddr) {
+      // Destination starts inside the source range: copy backward so earlier
+      // writes do not clobber not-yet-read source elements.
       std::copy_backward(Slice.begin(), Slice.end(), Write.end());
+    } else {
+      std::copy(Slice.begin(), Slice.end(), Write.begin());
     }
     return {};
   }
@@ -147,6 +168,14 @@ public:
       spdlog::error(ErrCode::Value::TableOutOfBounds);
       spdlog::error(ErrInfo::InfoBoundary(Offset, Length, getSize()));
       return Unexpect(ErrCode::Value::TableOutOfBounds);
+    }
+
+    // Table slots are GC roots; shade the overwritten range and the fill value
+    // so a concurrent collection does not miss a still-reachable object.
+    if (Allocator) {
+      Allocator->bulkWriteBarrier(
+          Span<const RefVariant>(Refs).subspan(Offset, Length));
+      Allocator->writeBarrier(Val);
     }
 
     // Fill the references.
@@ -171,6 +200,12 @@ public:
       spdlog::error(ErrCode::Value::TableOutOfBounds);
       spdlog::error(ErrInfo::InfoBoundary(Idx, 1, getSize()));
       return Unexpect(ErrCode::Value::TableOutOfBounds);
+    }
+    // Table slots are GC roots; shade both the overwritten and the newly stored
+    // reference so a concurrent collection does not miss a reachable object.
+    if (Allocator) {
+      Allocator->writeBarrier(Refs[Idx]);
+      Allocator->writeBarrier(Val);
     }
     Refs[Idx] = Val;
     return {};

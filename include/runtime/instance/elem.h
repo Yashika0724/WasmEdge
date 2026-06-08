@@ -45,12 +45,12 @@ public:
   /// Get slice of Refs[Offset : Offset + Length - 1]
   Expect<Span<const RefVariant>> getRefs(uint32_t Offset,
                                          uint32_t Length) const noexcept {
-    // Check the accessing boundary.
-    if (Offset + Length > Refs.size()) {
+    // Check the accessing boundary. Compare without computing Offset + Length,
+    // which would overflow uint32_t and could spuriously pass the check.
+    if (Offset > Refs.size() || Length > Refs.size() - Offset) {
       spdlog::error(ErrCode::Value::TableOutOfBounds);
-      spdlog::error(ErrInfo::InfoBoundary(
-          Offset, Length,
-          std::max(static_cast<uint32_t>(Refs.size()), 1U) - 1U));
+      spdlog::error(ErrInfo::InfoBoundary(Offset, Length,
+                                          static_cast<uint32_t>(Refs.size())));
       return Unexpect(ErrCode::Value::TableOutOfBounds);
     }
     return Span<const RefVariant>(Refs).subspan(Offset, Length);
